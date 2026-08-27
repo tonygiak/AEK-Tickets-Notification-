@@ -1,64 +1,65 @@
 """
-Diagnostic pass: fetch the AEK ticketmaster.gr listing page and dump what we
-actually get back, so the detection logic can be written against real
-markup instead of guesses. Run via the 'diagnose' workflow_dispatch input.
+Diagnostic pass (Playwright): render the AEK ticketmaster.gr listing page
+with a real headless browser and dump what we actually get back, so the
+detection logic can be written against real markup instead of guesses.
 """
-import os
-
-import requests
+from playwright.sync_api import sync_playwright
 
 URL = "https://www.ticketmaster.gr/aek/showProductList.html"
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-    ),
-    "Accept": (
-        "text/html,application/xhtml+xml,application/xml;q=0.9,"
-        "image/avif,image/webp,*/*;q=0.8"
-    ),
-    "Accept-Language": "el-GR,el;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Referer": "https://www.ticketmaster.gr/",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "same-origin",
-    "Upgrade-Insecure-Requests": "1",
-}
-
 
 def main():
-    session = requests.Session()
-    session.headers.update(HEADERS)
-    home = session.get("https://www.ticketmaster.gr/", timeout=30)
-    print("homepage status:", home.status_code, "len:", len(home.text))
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+            ),
+            locale="el-GR",
+            viewport={"width": 1280, "height": 900},
+        )
+        page = context.new_page()
 
-    resp = session.get(URL, timeout=30)
-    print("status:", resp.status_code)
-    print("final url:", resp.url)
-    print("content-type:", resp.headers.get("content-type"))
-    print("length:", len(resp.text))
-    print("headers:", dict(resp.headers))
-    print("body:", repr(resp.text))
+        print("navigating to homepage...")
+        page.goto("https://www.ticketmaster.gr/", wait_until="networkidle", timeout=45000)
+        print("homepage title:", page.title())
 
-    html = resp.text
-    with open("page_dump.html", "w", encoding="utf-8") as f:
-        f.write(html)
+        print("navigating to AEK listing page...")
+        resp = page.goto(URL, wait_until="networkidle", timeout=45000)
+        print("status:", resp.status if resp else None)
+        page.wait_for_timeout(3000)  # let any client-side rendering settle
 
-    lower = html.lower()
-    for needle in [
-        "real madrid",
-        "ρεαλ μαδριτ",
-        "aek",
-        "sold out",
-        "εξαντλ",
-        "no events",
-        "δεν υπάρχ",
-        "buy",
-        "αγορ",
-    ]:
-        print(f"contains {needle!r}:", needle in lower)
+        html = page.content()
+        text = page.inner_text("body")
+
+        with open("page_dump.html", "w", encoding="utf-8") as f:
+            f.write(html)
+        with open("page_dump.txt", "w", encoding="utf-8") as f:
+            f.write(text)
+
+        print("title:", page.title())
+        print("html length:", len(html))
+        print("visible text length:", len(text))
+        print("visible text (first 3000 chars):")
+        print(text[:3000])
+
+        lower = (html + text).lower()
+        for needle in [
+            "real madrid",
+            "ρεαλ μαδριτ",
+            "aek",
+            "sold out",
+            "εξαντλ",
+            "no events",
+            "δεν υπάρχ",
+            "buy",
+            "αγορ",
+            "identity verified",
+        ]:
+            print(f"contains {needle!r}:", needle in lower)
+
+        browser.close()
 
 
 if __name__ == "__main__":
